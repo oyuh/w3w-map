@@ -1,0 +1,8 @@
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# Tiles served from Cloudflare R2, not Git
+public/tiles/
