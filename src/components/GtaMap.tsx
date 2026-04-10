@@ -36,6 +36,8 @@ interface GtaMapProps {
   searchCoords: { x: number; y: number } | null;
   searchHighlightBounds: { minX: number; maxX: number; minY: number; maxY: number } | null;
   postalHighlight: { x: number; y: number } | null;
+  onSelectionChange: (bounds: { minX: number; maxX: number; minY: number; maxY: number } | null) => void;
+  selectionBounds: { minX: number; maxX: number; minY: number; maxY: number } | null;
 }
 
 // Custom grid overlay using L.GridLayer with Canvas tiles
@@ -167,13 +169,13 @@ function createPostalLayer(postals: PostalEntry[]) {
         const lx = px - tileStartX + 3;
         const ly = py - tileStartY + 3;
 
-        // Shadow for legibility
-        ctx.fillStyle = "rgba(0,0,0,0.85)";
-        ctx.fillText(p.code, lx + 1, ly + 1);
-        ctx.fillStyle = "rgba(0,0,0,0.5)";
-        ctx.fillText(p.code, lx - 1, ly + 2);
+        // White outline for legibility on dark backgrounds
+        ctx.strokeStyle = "rgba(255,255,255,0.9)";
+        ctx.lineWidth = 3;
+        ctx.lineJoin = "round";
+        ctx.strokeText(p.code, lx, ly);
         // Main text
-        ctx.fillStyle = "#f0d060";
+        ctx.fillStyle = "#000000";
         ctx.fillText(p.code, lx, ly);
       }
 
@@ -198,6 +200,8 @@ export default function GtaMap({
   searchCoords,
   searchHighlightBounds,
   postalHighlight,
+  onSelectionChange,
+  selectionBounds,
 }: GtaMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -208,15 +212,21 @@ export default function GtaMap({
   const searchHighlightRef = useRef<L.Rectangle | null>(null);
   const searchAreaRef = useRef<L.Rectangle | null>(null);
   const postalLayerRef = useRef<L.GridLayer | null>(null);
-  const postalCircleRef = useRef<L.CircleMarker | null>(null);
+  const postalRectRef = useRef<L.LayerGroup | null>(null);
   const postalsVisibleRef = useRef(postalsVisible);
   const postalsDataRef = useRef<PostalEntry[]>([]);
   const onCellSelectRef = useRef(onCellSelect);
   const selectedCoordsRef = useRef<{ x: number; y: number } | null>(null);
+  const selectionRectRef = useRef<L.Rectangle | null>(null);
+  const selectionStartRef = useRef<{ minX: number; maxX: number; minY: number; maxY: number } | null>(null);
+  const isDraggingSelectionRef = useRef(false);
+  const skipClickRef = useRef(false);
+  const onSelectionChangeRef = useRef(onSelectionChange);
 
   useEffect(() => { postalsVisibleRef.current = postalsVisible; }, [postalsVisible]);
   useEffect(() => { onCellSelectRef.current = onCellSelect; }, [onCellSelect]);
   useEffect(() => { selectedCoordsRef.current = searchCoords; }, [searchCoords]);
+  useEffect(() => { onSelectionChangeRef.current = onSelectionChange; }, [onSelectionChange]);
 
   // Initialize map once
   useEffect(() => {
@@ -237,6 +247,7 @@ export default function GtaMap({
       attributionControl: false,
       maxBounds: mapBounds.pad(0.5),
       maxBoundsViscosity: 0.8,
+      boxZoom: false,
     });
 
     // Add zoom control to bottom-right so it doesn't overlap search toggle
@@ -291,16 +302,40 @@ export default function GtaMap({
     });
     searchHighlightRef.current = searchHL;
 
-    // Postal search highlight circle
-    const postalHL = L.circleMarker([0, 0], {
-      radius: 16,
-      color: "#ff0000",
-      weight: 3,
-      fillColor: "#ff0000",
-      fillOpacity: 0.2,
+    // Area selection rectangle (orange, dashed)
+    const selectionRect = L.rectangle([[0, 0], [0, 0]], {
+      color: "#ff8800",
+      weight: 2,
+      fillColor: "#ff8800",
+      fillOpacity: 0.12,
+      dashArray: "6, 4",
       interactive: false,
     });
-    postalCircleRef.current = postalHL;
+    selectionRectRef.current = selectionRect;
+
+    // Postal search highlight (glowing yellow ping dot)
+    const postalGlow = L.circleMarker([0, 0], {
+      radius: 18,
+      color: "#ffcc00",
+      weight: 0,
+      fillColor: "#ffcc00",
+      fillOpacity: 0.25,
+      interactive: false,
+    });
+    const postalDot = L.circleMarker([0, 0], {
+      radius: 8,
+      color: "#fff",
+      weight: 2,
+      fillColor: "#ffcc00",
+      fillOpacity: 0.9,
+      interactive: false,
+    });
+    postalRectRef.current = null;
+    // Store both markers via a layer group
+    const postalGroup = L.layerGroup([postalGlow, postalDot]);
+    (postalGroup as any)._glow = postalGlow;
+    (postalGroup as any)._dot = postalDot;
+    postalRectRef.current = postalGroup as any;
 
     // Center on GTA map
     const center = map.unproject([MAP_SIZE / 2, MAP_SIZE / 2], 7);
@@ -316,34 +351,115 @@ export default function GtaMap({
       if (!wordsRef.current.length) return;
       const gta = latLngToGta(map, e.latlng);
 
-      // Clamp to GTA bounds
-      if (gta.x < GTA_MIN || gta.x > GTA_MAX || gta.y < GTA_MIN || gta.y > GTA_MAX) {
+      const inBounds = gta.x >= GTA_MIN && gta.x <= GTA_MAX && gta.y >= GTA_MIN && gta.y <= GTA_MAX;
+
+      if (!inBounds) {
         if (highlightRef.current && map.hasLayer(highlightRef.current)) {
           map.removeLayer(highlightRef.current);
         }
-        return;
+      } else {
+        const w3w = coordsToW3W(gta.x, gta.y, wordsRef.current);
+        onCursorMove(w3w, { x: Math.round(gta.x), y: Math.round(gta.y) });
+
+        // Update highlight rectangle
+        if (map.getZoom() >= 5 && highlightRef.current) {
+          const cell = getGridCell(gta.x, gta.y);
+          const sw = gtaToLatLng(map, cell.minX, cell.minY);
+          const ne = gtaToLatLng(map, cell.maxX, cell.maxY);
+          highlightRef.current.setBounds(L.latLngBounds(sw, ne));
+          if (!map.hasLayer(highlightRef.current)) {
+            highlightRef.current.addTo(map);
+          }
+        } else if (highlightRef.current && map.hasLayer(highlightRef.current)) {
+          map.removeLayer(highlightRef.current);
+        }
       }
 
-      const w3w = coordsToW3W(gta.x, gta.y, wordsRef.current);
-      onCursorMove(w3w, { x: Math.round(gta.x), y: Math.round(gta.y) });
+      // Update selection rectangle during shift+drag
+      if (isDraggingSelectionRef.current && selectionStartRef.current) {
+        const clampedX = Math.max(GTA_MIN, Math.min(GTA_MAX, gta.x));
+        const clampedY = Math.max(GTA_MIN, Math.min(GTA_MAX, gta.y));
+        const cell = getGridCell(clampedX, clampedY);
+        const start = selectionStartRef.current;
 
-      // Update highlight rectangle
-      if (map.getZoom() >= 5 && highlightRef.current) {
-        const cell = getGridCell(gta.x, gta.y);
+        const minX = Math.min(start.minX, cell.minX);
+        const maxX = Math.max(start.maxX, cell.maxX);
+        const minY = Math.min(start.minY, cell.minY);
+        const maxY = Math.max(start.maxY, cell.maxY);
+
+        const sw = gtaToLatLng(map, minX, minY);
+        const ne = gtaToLatLng(map, maxX, maxY);
+        if (selectionRectRef.current) {
+          selectionRectRef.current.setBounds(L.latLngBounds(sw, ne));
+          if (!map.hasLayer(selectionRectRef.current)) {
+            selectionRectRef.current.addTo(map);
+          }
+        }
+      }
+    });
+
+    // Shift+mousedown to start area selection
+    map.on("mousedown", (e: L.LeafletMouseEvent) => {
+      if (!e.originalEvent.shiftKey) return;
+      if (!wordsRef.current.length) return;
+
+      const gta = latLngToGta(map, e.latlng);
+      if (gta.x < GTA_MIN || gta.x > GTA_MAX || gta.y < GTA_MIN || gta.y > GTA_MAX) return;
+
+      e.originalEvent.preventDefault();
+      map.dragging.disable();
+
+      const cell = getGridCell(gta.x, gta.y);
+      selectionStartRef.current = cell;
+      isDraggingSelectionRef.current = true;
+
+      // Show initial single-cell selection
+      if (selectionRectRef.current) {
         const sw = gtaToLatLng(map, cell.minX, cell.minY);
         const ne = gtaToLatLng(map, cell.maxX, cell.maxY);
-        highlightRef.current.setBounds(L.latLngBounds(sw, ne));
-        if (!map.hasLayer(highlightRef.current)) {
-          highlightRef.current.addTo(map);
+        selectionRectRef.current.setBounds(L.latLngBounds(sw, ne));
+        if (!map.hasLayer(selectionRectRef.current)) {
+          selectionRectRef.current.addTo(map);
         }
-      } else if (highlightRef.current && map.hasLayer(highlightRef.current)) {
-        map.removeLayer(highlightRef.current);
       }
+    });
+
+    // Mouseup to finalize area selection
+    map.on("mouseup", (e: L.LeafletMouseEvent) => {
+      if (!isDraggingSelectionRef.current || !selectionStartRef.current) return;
+
+      isDraggingSelectionRef.current = false;
+      map.dragging.enable();
+      skipClickRef.current = true;
+
+      const gta = latLngToGta(map, e.latlng);
+      const clampedX = Math.max(GTA_MIN, Math.min(GTA_MAX, gta.x));
+      const clampedY = Math.max(GTA_MIN, Math.min(GTA_MAX, gta.y));
+      const cell = getGridCell(clampedX, clampedY);
+      const start = selectionStartRef.current;
+
+      const minX = Math.min(start.minX, cell.minX);
+      const maxX = Math.max(start.maxX, cell.maxX);
+      const minY = Math.min(start.minY, cell.minY);
+      const maxY = Math.max(start.maxY, cell.maxY);
+
+      onSelectionChangeRef.current({ minX, maxX, minY, maxY });
+      selectionStartRef.current = null;
+
+      setTimeout(() => { skipClickRef.current = false; }, 100);
     });
 
     // Click to select/deselect W3W cell
     map.on("click", (e: L.LeafletMouseEvent) => {
+      if (skipClickRef.current) { skipClickRef.current = false; return; }
       if (!wordsRef.current.length) return;
+
+      // Clear area selection on regular click
+      if (selectionRectRef.current && map.hasLayer(selectionRectRef.current)) {
+        map.removeLayer(selectionRectRef.current);
+      }
+      onSelectionChangeRef.current(null);
+
       const gta = latLngToGta(map, e.latlng);
       if (gta.x < GTA_MIN || gta.x > GTA_MAX || gta.y < GTA_MIN || gta.y > GTA_MAX) return;
 
@@ -414,6 +530,7 @@ export default function GtaMap({
     if (postalLayerRef.current && map.hasLayer(postalLayerRef.current)) postalLayerRef.current.bringToFront();
     if (gridLayerRef.current && map.hasLayer(gridLayerRef.current)) gridLayerRef.current.bringToFront();
     if (searchAreaRef.current && map.hasLayer(searchAreaRef.current)) searchAreaRef.current.bringToFront();
+    if (selectionRectRef.current && map.hasLayer(selectionRectRef.current)) selectionRectRef.current.bringToFront();
     if (highlightRef.current && map.hasLayer(highlightRef.current)) highlightRef.current.bringToFront();
     if (searchHighlightRef.current && map.hasLayer(searchHighlightRef.current)) searchHighlightRef.current.bringToFront();
   }, [currentLayer]);
@@ -440,24 +557,29 @@ export default function GtaMap({
       if (postalsVisible && !map.hasLayer(layer)) layer.addTo(map);
       else if (!postalsVisible && map.hasLayer(layer)) map.removeLayer(layer);
     }
-    if (!postalsVisible && postalCircleRef.current && map.hasLayer(postalCircleRef.current)) {
-      map.removeLayer(postalCircleRef.current);
+    if (!postalsVisible && postalRectRef.current && map.hasLayer(postalRectRef.current)) {
+      map.removeLayer(postalRectRef.current);
     }
   }, [postalsVisible]);
 
-  // Handle postal highlight from search
+  // Handle postal highlight from search (glowing yellow dot)
   useEffect(() => {
     const map = mapRef.current;
-    const circle = postalCircleRef.current;
-    if (!map || !circle) return;
+    const group = postalRectRef.current;
+    if (!map || !group) return;
 
     if (postalHighlight) {
       const latlng = gtaToLatLng(map, postalHighlight.x, postalHighlight.y);
-      circle.setLatLng(latlng);
-      if (!map.hasLayer(circle)) circle.addTo(map);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const glow = (group as any)._glow as L.CircleMarker;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const dot = (group as any)._dot as L.CircleMarker;
+      glow.setLatLng(latlng);
+      dot.setLatLng(latlng);
+      if (!map.hasLayer(group)) group.addTo(map);
       map.setView(latlng, Math.max(map.getZoom(), 5), { animate: true });
     } else {
-      if (map.hasLayer(circle)) map.removeLayer(circle);
+      if (map.hasLayer(group)) map.removeLayer(group);
     }
   }, [postalHighlight]);
 
@@ -495,6 +617,23 @@ export default function GtaMap({
       if (map.hasLayer(rect)) map.removeLayer(rect);
     }
   }, [searchHighlightBounds]);
+
+  // Handle area selection bounds from parent (for Clear All, etc.)
+  useEffect(() => {
+    const map = mapRef.current;
+    const rect = selectionRectRef.current;
+    if (!map || !rect) return;
+
+    if (selectionBounds) {
+      const sw = gtaToLatLng(map, selectionBounds.minX, selectionBounds.minY);
+      const ne = gtaToLatLng(map, selectionBounds.maxX, selectionBounds.maxY);
+      rect.setBounds(L.latLngBounds(sw, ne));
+      if (!map.hasLayer(rect)) rect.addTo(map);
+      rect.bringToFront();
+    } else {
+      if (map.hasLayer(rect)) map.removeLayer(rect);
+    }
+  }, [selectionBounds]);
 
   return (
     <div className="relative w-full h-full">

@@ -8,6 +8,11 @@ interface InfoBarProps {
   zoom: number;
   selectedW3W: string;
   selectedCoords: { x: number; y: number } | null;
+  selectionInfo: {
+    minX: number; maxX: number; minY: number; maxY: number;
+    cellCountX: number; cellCountY: number;
+    totalCells: number;
+  } | null;
 }
 
 function GitHubIcon() {
@@ -35,7 +40,7 @@ function CoffeeIcon() {
   );
 }
 
-export default function InfoBar({ w3w, coords, zoom, selectedW3W, selectedCoords }: InfoBarProps) {
+export default function InfoBar({ w3w, coords, zoom, selectedW3W, selectedCoords, selectionInfo }: InfoBarProps) {
   return (
     <div className="flex-none h-9 border-t-2 border-brutal-border bg-brutal-bg flex items-center px-4 gap-6 z-50 relative" style={{ fontVariantNumeric: 'tabular-nums' }}>
       {/* Hover W3W */}
@@ -80,6 +85,22 @@ export default function InfoBar({ w3w, coords, zoom, selectedW3W, selectedCoords
                 ({selectedCoords.x}, {selectedCoords.y})
               </span>
             )}
+          </div>
+        </>
+      )}
+
+      {/* Area selection info */}
+      {selectionInfo && (
+        <>
+          <div className="w-px h-4 bg-brutal-border shrink-0" />
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-[10px] text-orange-500 uppercase tracking-wider font-bold shrink-0">Area</span>
+            <span className="text-xs text-brutal-muted font-mono">
+              {selectionInfo.cellCountX}×{selectionInfo.cellCountY} = {selectionInfo.totalCells} cells
+            </span>
+            <span className="text-[10px] text-brutal-dim font-mono">
+              X:{selectionInfo.minX}→{selectionInfo.maxX} Y:{selectionInfo.minY}→{selectionInfo.maxY}
+            </span>
           </div>
         </>
       )}

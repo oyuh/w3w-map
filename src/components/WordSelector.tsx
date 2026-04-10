@@ -9,6 +9,7 @@ interface WordSelectorProps {
   onChange: (word: string) => void;
   disabled?: boolean;
   autoValue?: string;
+  allowWildcard?: boolean;
 }
 
 export default function WordSelector({
@@ -18,6 +19,7 @@ export default function WordSelector({
   onChange,
   disabled = false,
   autoValue,
+  allowWildcard = false,
 }: WordSelectorProps) {
   const [query, setQuery] = useState("");
   const [isOpen, setIsOpen] = useState(false);
@@ -31,9 +33,12 @@ export default function WordSelector({
   }, [autoValue, onChange, value]);
 
   const filtered = useMemo(() => {
-    if (!query) return words.slice(1, 101);
-    const q = query.toLowerCase();
     const results: string[] = [];
+    if (allowWildcard && (!query || "*".startsWith(query.toLowerCase()))) {
+      results.push("*");
+    }
+    if (!query) return [...results, ...words.slice(1, 101)];
+    const q = query.toLowerCase();
     for (let i = 1; i < words.length && results.length < 50; i++) {
       if (words[i].startsWith(q)) results.push(words[i]);
     }
@@ -44,7 +49,7 @@ export default function WordSelector({
       }
     }
     return results;
-  }, [words, query]);
+  }, [words, query, allowWildcard]);
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
@@ -77,7 +82,9 @@ export default function WordSelector({
       </label>
       {value ? (
         <div className="flex items-center bg-brutal-surface border-2 border-brutal-highlight px-3 py-1.5 text-sm">
-          <span className="flex-1 text-brutal-text font-bold">{value}</span>
+          <span className={`flex-1 font-bold ${value === "*" ? "text-brutal-accent" : "text-brutal-text"}`}>
+            {value === "*" ? "★ Any (wildcard)" : value}
+          </span>
           <button
             onClick={handleClear}
             className="text-brutal-dim hover:text-brutal-text ml-2 text-xs"
@@ -109,9 +116,11 @@ export default function WordSelector({
               <button
                 key={word}
                 onClick={() => handleSelect(word)}
-                className="block w-full text-left px-3 py-1 text-sm text-brutal-muted hover:bg-brutal-surface hover:text-brutal-text transition-colors"
+                className={`block w-full text-left px-3 py-1 text-sm hover:bg-brutal-surface hover:text-brutal-text transition-colors ${
+                  word === "*" ? "text-brutal-accent font-bold border-b border-brutal-border" : "text-brutal-muted"
+                }`}
               >
-                {word}
+                {word === "*" ? "★ Any (wildcard)" : word}
               </button>
             ))
           )}

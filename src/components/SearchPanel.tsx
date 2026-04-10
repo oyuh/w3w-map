@@ -3,6 +3,12 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import WordSelector from "./WordSelector";
 
+interface SelectionInfo {
+  minX: number; maxX: number; minY: number; maxY: number;
+  cellCountX: number; cellCountY: number;
+  totalCells: number;
+}
+
 interface SearchPanelProps {
   onSearch: (address: string) => void;
   onClearSearch: () => void;
@@ -10,9 +16,10 @@ interface SearchPanelProps {
   onPostalSearch: (code: string) => void;
   words: string[];
   postals: { x: number; y: number; code: string }[];
+  selectionInfo: SelectionInfo | null;
 }
 
-export default function SearchPanel({ onSearch, onClearSearch, onPartialChange, onPostalSearch, words, postals }: SearchPanelProps) {
+export default function SearchPanel({ onSearch, onClearSearch, onPartialChange, onPostalSearch, words, postals, selectionInfo }: SearchPanelProps) {
   const [query, setQuery] = useState("");
   const [isOpen, setIsOpen] = useState(true);
   const [word1, setWord1] = useState("");
@@ -21,26 +28,28 @@ export default function SearchPanel({ onSearch, onClearSearch, onPartialChange, 
   const [postalQuery, setPostalQuery] = useState("");
 
   const autoWord3 =
-    word1 && words.length > 0
+    word1 && word1 !== "*" && words.length > 0
       ? words[words.indexOf(word1) + 10] || ""
       : "";
 
   useEffect(() => {
-    if (word1 && word2 && (word3 || autoWord3)) {
+    if (word1 && word1 !== "*" && word2 && word2 !== "*" && (word3 || autoWord3)) {
       const addr = `${word1}.${word2}.${word3 || autoWord3}`;
       onSearch(addr);
     }
   }, [word1, word2, word3, autoWord3, onSearch]);
 
   useEffect(() => {
-    onPartialChange(word1, word2);
+    // Treat empty word1 with set word2 as wildcard
+    const effectiveW1 = !word1 && word2 ? "*" : word1;
+    onPartialChange(effectiveW1, word2);
   }, [word1, word2, onPartialChange]);
 
   // Progressive search from quick search input
   useEffect(() => {
     if (!query.trim()) {
       // Don't clear if word selectors are active
-      if (!word1) onPartialChange("", "");
+      if (!word1 && !word2) onPartialChange("", "");
       return;
     }
     const parts = query.trim().split(".");
@@ -150,7 +159,7 @@ export default function SearchPanel({ onSearch, onClearSearch, onPartialChange, 
               className="flex-1 bg-brutal-surface border-2 border-brutal-border text-brutal-text px-3 py-1.5 text-sm font-mono focus:border-brutal-muted focus:outline-none placeholder:text-brutal-dim"
             />
           </div>
-          <p className="text-[9px] text-brutal-dim mt-1">Type to progressively highlight area</p>
+          <p className="text-[9px] text-brutal-dim mt-1">Type to highlight · Use * for wildcard</p>
         </form>
 
         {/* Word selectors */}
@@ -158,8 +167,8 @@ export default function SearchPanel({ onSearch, onClearSearch, onPartialChange, 
           <div className="text-[10px] uppercase tracking-widest text-brutal-dim mb-1">
             — or select words —
           </div>
-          <WordSelector label="Word 1" words={words} value={word1} onChange={setWord1} />
-          <WordSelector label="Word 2" words={words} value={word2} onChange={setWord2} />
+          <WordSelector label="Word 1" words={words} value={word1} onChange={setWord1} allowWildcard />
+          <WordSelector label="Word 2" words={words} value={word2} onChange={setWord2} allowWildcard />
           <WordSelector
             label="Word 3"
             words={words}
@@ -206,6 +215,33 @@ export default function SearchPanel({ onSearch, onClearSearch, onPartialChange, 
           )}
         </div>
 
+        {/* Selection Info */}
+        {selectionInfo && (
+          <div className="p-4 border-b border-brutal-border">
+            <div className="text-[10px] uppercase tracking-widest text-orange-500 font-bold mb-2">
+              ■ Area Selection
+            </div>
+            <div className="space-y-1.5 text-xs font-mono">
+              <div className="flex justify-between">
+                <span className="text-brutal-dim">X Range</span>
+                <span className="text-brutal-muted">{selectionInfo.minX} → {selectionInfo.maxX}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-brutal-dim">Y Range</span>
+                <span className="text-brutal-muted">{selectionInfo.minY} → {selectionInfo.maxY}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-brutal-dim">Size</span>
+                <span className="text-brutal-muted">{selectionInfo.cellCountX} × {selectionInfo.cellCountY}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-brutal-dim">Cells</span>
+                <span className="text-orange-500 font-bold">{selectionInfo.totalCells}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Clear */}
         <div className="p-4">
           <button
@@ -223,8 +259,10 @@ export default function SearchPanel({ onSearch, onClearSearch, onPartialChange, 
         </h3>
         <div className="space-y-1 text-[11px] text-brutal-dim">
           <p><span className="text-brutal-muted font-bold">Click</span> — Pin / Unpin W3W</p>
+          <p><span className="text-brutal-muted font-bold">Shift+Drag</span> — Area select</p>
           <p><span className="text-brutal-muted font-bold">Hover</span> — Live preview</p>
           <p><span className="text-brutal-muted font-bold">Scroll</span> — Zoom</p>
+          <p><span className="text-brutal-muted font-bold">*.word.*</span> — Wildcard search</p>
         </div>
       </div>
     </div>

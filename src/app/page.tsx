@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import dynamic from "next/dynamic";
 import SearchPanel from "@/components/SearchPanel";
 import InfoBar from "@/components/InfoBar";
@@ -56,6 +56,19 @@ export default function Home() {
   const [searchHighlightBounds, setSearchHighlightBounds] = useState<{ minX: number; maxX: number; minY: number; maxY: number } | null>(null);
   const [postals, setPostals] = useState<{ x: number; y: number; code: string }[]>([]);
   const [postalHighlight, setPostalHighlight] = useState<{ x: number; y: number } | null>(null);
+  const [selectionBounds, setSelectionBounds] = useState<{ minX: number; maxX: number; minY: number; maxY: number } | null>(null);
+
+  const selectionInfo = useMemo(() => {
+    if (!selectionBounds) return null;
+    const cellCountX = Math.round((selectionBounds.maxX - selectionBounds.minX) / 8);
+    const cellCountY = Math.round((selectionBounds.maxY - selectionBounds.minY) / 8);
+    return {
+      ...selectionBounds,
+      cellCountX,
+      cellCountY,
+      totalCells: cellCountX * cellCountY,
+    };
+  }, [selectionBounds]);
 
   const handleMapReady = useCallback((map: any, loadedWords: string[], loadedPostals: any[]) => {
     setMapRef(map);
@@ -87,6 +100,7 @@ export default function Home() {
 
   const handleCellSelect = useCallback(
     (w3w: string, coords: { x: number; y: number }) => {
+      setSelectionBounds(null);
       if (!w3w) {
         // Deselect
         setSelectedW3W("");
@@ -97,6 +111,18 @@ export default function Home() {
       setSelectedW3W(w3w);
       setSelectedCoords(coords);
       setSearchCoords(coords);
+    },
+    []
+  );
+
+  const handleSelectionChange = useCallback(
+    (bounds: { minX: number; maxX: number; minY: number; maxY: number } | null) => {
+      setSelectionBounds(bounds);
+      if (bounds) {
+        setSelectedW3W("");
+        setSelectedCoords(null);
+        setSearchCoords(null);
+      }
     },
     []
   );
@@ -122,14 +148,17 @@ export default function Home() {
     setSelectedW3W("");
     setSelectedCoords(null);
     setSearchHighlightBounds(null);
+    setSelectionBounds(null);
   }, []);
 
   const handlePartialChange = useCallback(
     (w1: string, w2: string) => {
-      if (!words.length || !w1) {
+      if (!words.length || (!w1 && !w2)) {
         setSearchHighlightBounds(null);
         return;
       }
+      // Treat empty w1 with set w2 as wildcard
+      if (!w1 && w2) w1 = "*";
       // Wildcard: *.word highlights a horizontal band for word2 (Y axis)
       if (w1 === "*") {
         if (!w2) { setSearchHighlightBounds(null); return; }
@@ -145,7 +174,7 @@ export default function Home() {
         return;
       }
       const x = idx1 * 8 - 8000;
-      if (!w2) {
+      if (!w2 || w2 === "*") {
         setSearchHighlightBounds({ minX: x, maxX: x + 8, minY: GTA_MIN, maxY: GTA_MAX });
         return;
       }
@@ -227,6 +256,7 @@ export default function Home() {
           onPostalSearch={handlePostalSearch}
           words={words}
           postals={postals}
+          selectionInfo={selectionInfo}
         />
 
         {/* Map */}
@@ -242,6 +272,8 @@ export default function Home() {
             searchCoords={searchCoords}
             searchHighlightBounds={searchHighlightBounds}
             postalHighlight={postalHighlight}
+            onSelectionChange={handleSelectionChange}
+            selectionBounds={selectionBounds}
           />
         </div>
       </div>
@@ -253,6 +285,7 @@ export default function Home() {
         zoom={zoom}
         selectedW3W={selectedW3W}
         selectedCoords={selectedCoords}
+        selectionInfo={selectionInfo}
       />
     </main>
   );
